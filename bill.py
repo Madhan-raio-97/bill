@@ -1,7 +1,7 @@
 import sys
 import sqlite3
 import os
-from PyQt6.QtCore import QRegularExpression, QTimer
+from PyQt6.QtCore import QRegularExpression
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog
 from reportlab.lib.pagesizes import A4
@@ -15,18 +15,13 @@ p = inflect.engine()
 class BillEntrySystem(QWidget):
     def __init__(self):
         super().__init__()
-        
+
         print("Window Initialized")  # Ensure the initialization happens
         self.setWindowTitle("Bill Entry System")
         self.setGeometry(100, 100, 600, 400)
 
         self.init_db()
         self.init_ui()
-
-        # Timer for price input formatting
-        self.price_format_timer = QTimer(self)
-        self.price_format_timer.setSingleShot(True)  # Execute only once after the delay
-        self.price_format_timer.timeout.connect(self.format_price)
 
     def init_db(self):
         """Initialize SQLite Database"""
@@ -56,7 +51,7 @@ class BillEntrySystem(QWidget):
         
         # Corrected the Price validator regex
         price_validator = QRegularExpressionValidator(QRegularExpression(r"^\d{1,8}(\.\d{1,2})?$"))
-        self.price_input = self.create_input_layout(entry_layout, "Price:", price_validator, self.on_price_input_changed)
+        self.price_input = self.create_input_layout(entry_layout, "Price:", price_validator)
 
         # Action Buttons (Add, Remove, Clear, Download)
         action_layout = self.create_action_buttons()
@@ -65,7 +60,8 @@ class BillEntrySystem(QWidget):
         self.table = self.create_table_widget()
 
         # Total Label and Calculation Button
-        self.total_label = QLabel("Total: $0.00")
+        self.total_label = QLabel("Total: ₹0.00")
+        self.total_in_words_label = QLabel("Total in Words: Zero Rupees")
         self.calculate_button = QPushButton("Calculate Total")
         self.calculate_button.clicked.connect(self.calculate_total)
 
@@ -73,6 +69,7 @@ class BillEntrySystem(QWidget):
         main_layout.addLayout(action_layout)
         main_layout.addWidget(self.table)
         main_layout.addWidget(self.total_label)
+        main_layout.addWidget(self.total_in_words_label)
         main_layout.addWidget(self.calculate_button)
 
         self.setLayout(main_layout)
@@ -82,14 +79,12 @@ class BillEntrySystem(QWidget):
         self.quantity_input.textChanged.connect(self.check_fields)
         self.price_input.textChanged.connect(self.check_fields)
 
-    def create_input_layout(self, layout, label_text, validator=None, text_changed_func=None):
-        """Helper function to create a labeled input field with optional validator and textChanged function"""
+    def create_input_layout(self, layout, label_text, validator=None):
+        """Helper function to create a labeled input field with optional validator"""
         label = QLabel(label_text)
         input_field = QLineEdit()
         if validator:
             input_field.setValidator(validator)
-        if text_changed_func:
-            input_field.textChanged.connect(text_changed_func)
         layout.addWidget(label)
         layout.addWidget(input_field)
         return input_field
@@ -101,6 +96,7 @@ class BillEntrySystem(QWidget):
         self.add_button = QPushButton("Add Item")
         self.add_button.setEnabled(False)
         self.add_button.clicked.connect(self.add_item)
+        self.add_button.clicked.connect(self.calculate_total)
 
         self.remove_button = QPushButton("Remove Item")
         self.remove_button.clicked.connect(self.remove_item)
@@ -126,22 +122,6 @@ class BillEntrySystem(QWidget):
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         return table
-
-    def on_price_input_changed(self):
-        """Trigger format after a delay"""
-        self.price_format_timer.stop()
-        self.price_format_timer.start(500)  # 500 ms delay
-
-    def format_price(self):
-        """Format price with commas as the user types"""
-        text = self.price_input.text().replace(",", "")
-        try:
-            value = float(text)
-            formatted_value = "{:,.2f}".format(value)
-            self.price_input.setText(formatted_value)
-            self.price_input.setCursorPosition(len(formatted_value))  # Keep the cursor at the end
-        except ValueError:
-            self.price_input.setText("")  # Clear if invalid
 
     def check_fields(self):
         """Check if all fields are valid, and enable the 'Add Item' button"""
@@ -202,11 +182,14 @@ class BillEntrySystem(QWidget):
         self.cursor.execute("DELETE FROM bill")
         self.conn.commit()
         self.table.setRowCount(0)
-        self.total_label.setText("Total: $0.00")
+        self.total_label.setText("Total: ₹0.00")
+        self.total_in_words_label.setText("Total in Words: Zero Rupees")
 
     def calculate_total(self):
         total = sum(float(self.table.item(row, 3).text()) for row in range(self.table.rowCount()))
+        total_in_words = self.convert_currency(total)
         self.total_label.setText(f"Total: ₹{total:,.2f}")
+        self.total_in_words_label.setText(f"Total in Words: {total_in_words}")
 
     def download_pdf(self):
         """Download the table data as a PDF file"""
@@ -219,18 +202,26 @@ class BillEntrySystem(QWidget):
                 data.append([self.table.item(row, col).text() for col in range(4)])
 
             table = Table(data)
-            table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')]))
+            table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), 
+                                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')]))
 
             # Add total in words at the end of the PDF
             total = sum(float(self.table.item(row, 3).text()) for row in range(self.table.rowCount()))
             total_in_words = self.convert_currency(total)
+
+            # Add numeric total in the PDF
+            total_numeric = f"Total: {total:,.2f}"
             styles = getSampleStyleSheet()
+
+            # Create paragraph for total in numbers and total in words
+            total_paragraph = Paragraph(f"<b>{total_numeric}</b>", styles['Normal'])
             total_in_words_paragraph = Paragraph(f"<b>Total in Words:</b> {total_in_words}", styles['Normal'])
             
-            # Build the PDF document with the table and the total in words
-            document.build([table, total_in_words_paragraph])
+            # Build the PDF document with the table and the total in words and numeric total
+            document.build([table, total_paragraph, total_in_words_paragraph])
 
             print(f"PDF saved to {file_name}")
+
 
     def closeEvent(self, event):
         """Close the connection and ensure the thread is properly terminated"""
