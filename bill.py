@@ -1,16 +1,13 @@
 import sys
 import sqlite3
 import os
+import datetime
 from PyQt6.QtCore import QRegularExpression
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
-import inflect
-
-# Initialize inflect engine for converting numbers to words
-p = inflect.engine()
 
 class BillEntrySystem(QWidget):
     def __init__(self):
@@ -62,15 +59,12 @@ class BillEntrySystem(QWidget):
         # Total Label and Calculation Button
         self.total_label = QLabel("Total: ₹0.00")
         self.total_in_words_label = QLabel("Total in Words: Zero Rupees")
-        self.calculate_button = QPushButton("Calculate Total")
-        self.calculate_button.clicked.connect(self.calculate_total)
 
         main_layout.addLayout(entry_layout)
         main_layout.addLayout(action_layout)
         main_layout.addWidget(self.table)
         main_layout.addWidget(self.total_label)
         main_layout.addWidget(self.total_in_words_label)
-        main_layout.addWidget(self.calculate_button)
 
         self.setLayout(main_layout)
 
@@ -187,12 +181,12 @@ class BillEntrySystem(QWidget):
 
     def calculate_total(self):
         total = sum(float(self.table.item(row, 3).text()) for row in range(self.table.rowCount()))
-        total_in_words = self.convert_currency(total)
+        total_in_words = self.convert_currency_to_words(total)
         self.total_label.setText(f"Total: ₹{total:,.2f}")
         self.total_in_words_label.setText(f"Total in Words: {total_in_words}")
 
     def download_pdf(self):
-        """Download the table data as a PDF file"""
+        """Download the table data as a PDF file with the current date as header"""
         file_name, _ = QFileDialog.getSaveFileName(self, "Save PDF", "", "PDF Files (*.pdf)")
         if file_name:
             document = SimpleDocTemplate(file_name, pagesize=A4)
@@ -203,11 +197,11 @@ class BillEntrySystem(QWidget):
 
             table = Table(data)
             table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), 
-                                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')]))
+                                       ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')]))
 
             # Add total in words at the end of the PDF
             total = sum(float(self.table.item(row, 3).text()) for row in range(self.table.rowCount()))
-            total_in_words = self.convert_currency(total)
+            total_in_words = self.convert_currency_to_words(total)
 
             # Add numeric total in the PDF
             total_numeric = f"Total: {total:,.2f}"
@@ -216,29 +210,59 @@ class BillEntrySystem(QWidget):
             # Create paragraph for total in numbers and total in words
             total_paragraph = Paragraph(f"<b>{total_numeric}</b>", styles['Normal'])
             total_in_words_paragraph = Paragraph(f"<b>Total in Words:</b> {total_in_words}", styles['Normal'])
-            
-            # Build the PDF document with the table and the total in words and numeric total
-            document.build([table, total_paragraph, total_in_words_paragraph])
+
+            # Get current date and add it as a header
+            current_date = datetime.datetime.now().strftime("%B %d, %Y")
+            date_paragraph = Paragraph(f"<b>Date: {current_date}</b>", styles['Normal'])
+
+            # Build the PDF document with the date, table, and total in words and numeric total
+            document.build([date_paragraph, table, total_paragraph, total_in_words_paragraph])
 
             print(f"PDF saved to {file_name}")
-
 
     def closeEvent(self, event):
         """Close the connection and ensure the thread is properly terminated"""
         self.conn.close()
         event.accept()
 
-    def convert_currency(self, amount):
-        # Split the amount into rupees and paise
+    def convert_currency_to_words(self, amount):
+        """Convert a numeric amount to words (Indian numbering system)"""
+        units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+                 "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+        tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+        large_units = ["", "Hundred", "Thousand", "Lakh", "Crore"]  # Using Lakh and Crore instead of Million and Billion
+
+        def convert_three_digits(n):
+            """Helper function for converting numbers less than 1000"""
+            if n == 0:
+                return ""
+            elif n < 20:
+                return units[n]
+            elif n < 100:
+                return tens[n // 10] + ('' if n % 10 == 0 else ' ' + units[n % 10])
+            else:
+                return units[n // 100] + " Hundred" + ('' if n % 100 == 0 else ' ' + convert_three_digits(n % 100))
+
+        def num_to_words(n):
+            if n == 0:
+                return "Zero"
+            
+            words = []
+            unit = 0
+            while n > 0:
+                if n % 1000 != 0:
+                    words.append(convert_three_digits(n % 1000) + (f" {large_units[unit]}" if large_units[unit] else ""))
+                n //= 1000
+                unit += 1
+            return ' '.join(reversed(words)).strip()
+
         rupees = int(amount)
         paise = round((amount - rupees) * 100)
 
-        # Convert the rupees part to words
-        rupees_in_words = p.number_to_words(rupees)
+        rupees_in_words = num_to_words(rupees)
 
-        # Convert the paise part to words, if any
         if paise > 0:
-            paise_in_words = p.number_to_words(paise)
+            paise_in_words = num_to_words(paise)
             return f"{rupees_in_words} Rupees and {paise_in_words} Paise"
         else:
             return f"{rupees_in_words} Rupees"
