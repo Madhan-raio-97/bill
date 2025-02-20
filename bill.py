@@ -73,6 +73,9 @@ class BillEntrySystem(QWidget):
         self.quantity_input.textChanged.connect(self.check_fields)
         self.price_input.textChanged.connect(self.check_fields)
 
+        # Load existing data from the database
+        self.load_data_from_db()
+
     def create_input_layout(self, layout, label_text, validator=None):
         """Helper function to create a labeled input field with optional validator"""
         label = QLabel(label_text)
@@ -222,8 +225,28 @@ class BillEntrySystem(QWidget):
 
     def closeEvent(self, event):
         """Close the connection and ensure the thread is properly terminated"""
-        self.conn.close()
-        event.accept()
+        self.conn.commit()  # Ensure all changes are committed
+        self.conn.close()   # Close the database connection
+        event.accept()      # Accept the close event
+
+    def load_data_from_db(self):
+        """Load saved data from the database into the table"""
+        self.cursor.execute("SELECT item_name, quantity, price, total FROM bill")
+        rows = self.cursor.fetchall()
+
+        if rows:
+            for row in rows:
+                row_position = self.table.rowCount()
+                self.table.insertRow(row_position)
+
+                self.table.setItem(row_position, 0, QTableWidgetItem(row[0]))
+                self.table.setItem(row_position, 1, QTableWidgetItem(str(row[1])))
+                self.table.setItem(row_position, 2, QTableWidgetItem(str(row[2])))
+                self.table.setItem(row_position, 3, QTableWidgetItem(str(row[3])))
+
+            self.calculate_total()  # Recalculate total after loading data
+        else:
+            print("No data found in the database.")
 
     def convert_currency_to_words(self, amount):
         """Convert a numeric amount to words (Indian numbering system)"""
