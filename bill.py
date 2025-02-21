@@ -20,10 +20,26 @@ class BillEntrySystem(QWidget):
         self.init_db()
         self.init_ui()
 
+        # Load data from the database when the app starts
+        self.load_data_from_db()
+
     def init_db(self):
         """Initialize SQLite Database"""
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bill_entries.db')
-        print(f"Database Path: {db_path}")  # Debugging database path
+        if getattr(sys, 'frozen', False):
+            # Running as a packaged .exe
+            app_data_path = os.getenv('APPDATA')
+            db_folder = os.path.join(app_data_path, 'BillEntryApp')
+
+            if not os.path.exists(db_folder):
+                os.makedirs(db_folder)
+
+            db_path = os.path.join(db_folder, 'bill_entries.db')
+            print(f"Using packaged app database path: {db_path}")
+        else:
+            # Running in development mode
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bill_entries.db')
+            print(f"Using development mode database path: {db_path}")
+
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS bill (
@@ -34,6 +50,19 @@ class BillEntrySystem(QWidget):
                                 total REAL)''')
         self.conn.commit()
 
+    def load_data_from_db(self):
+        """Load the saved data from the database into the table"""
+        self.cursor.execute("SELECT item_name, quantity, price, total FROM bill")
+        rows = self.cursor.fetchall()
+
+        for row in rows:
+            row_position = self.table.rowCount()
+            self.table.insertRow(row_position)
+            for col, value in enumerate(row):
+                self.table.setItem(row_position, col, QTableWidgetItem(str(value)))
+        
+        self.calculate_total()
+
     def init_ui(self):
         """Initialize the User Interface"""
         main_layout = QVBoxLayout()
@@ -41,11 +70,11 @@ class BillEntrySystem(QWidget):
         # Bill Entry Layout (For item name, quantity, price)
         entry_layout = QHBoxLayout()
         self.item_input = self.create_input_layout(entry_layout, "Item Name:")
-        
+
         # Corrected the Quantity validator regex
         quantity_validator = QRegularExpressionValidator(QRegularExpression(r"^\d{1,3}(\.\d{1,2})?$"))
         self.quantity_input = self.create_input_layout(entry_layout, "Quantity:", quantity_validator)
-        
+
         # Corrected the Price validator regex
         price_validator = QRegularExpressionValidator(QRegularExpression(r"^\d{1,8}(\.\d{1,2})?$"))
         self.price_input = self.create_input_layout(entry_layout, "Price:", price_validator)
@@ -72,9 +101,6 @@ class BillEntrySystem(QWidget):
         self.item_input.textChanged.connect(self.check_fields)
         self.quantity_input.textChanged.connect(self.check_fields)
         self.price_input.textChanged.connect(self.check_fields)
-
-        # Load existing data from the database
-        self.load_data_from_db()
 
     def create_input_layout(self, layout, label_text, validator=None):
         """Helper function to create a labeled input field with optional validator"""
@@ -146,7 +172,7 @@ class BillEntrySystem(QWidget):
 
     def save_item_to_db(self, item_name, quantity, price, total):
         """Save the item to the database and update the table"""
-        self.cursor.execute("INSERT INTO bill (item_name, quantity, price, total) VALUES (?, ?, ?, ?)",
+        self.cursor.execute("INSERT INTO bill (item_name, quantity, price, total) VALUES (?, ?, ?, ?) ",
                             (item_name, quantity, price, total))
         self.conn.commit()
 
@@ -193,70 +219,59 @@ class BillEntrySystem(QWidget):
         file_name, _ = QFileDialog.getSaveFileName(self, "Save PDF", "", "PDF Files (*.pdf)")
         if file_name:
             document = SimpleDocTemplate(file_name, pagesize=A4)
-            data = [["Item Name", "Quantity", "Price", "Total"]]
+            data = [
+                [Paragraph("<b>Item Name</b>", getSampleStyleSheet()['Heading4']),
+                 Paragraph("<b>Quantity</b>", getSampleStyleSheet()['Heading4']),
+                 Paragraph("<b>Price</b>", getSampleStyleSheet()['Heading4']),
+                 Paragraph("<b>Total</b>", getSampleStyleSheet()['Heading4'])]
+            ]
 
+            # Populate the table with data from the QTableWidget
             for row in range(self.table.rowCount()):
                 data.append([self.table.item(row, col).text() for col in range(4)])
 
             table = Table(data)
-            table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), 
-                                       ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')]))
+            
+            # Adding padding and style to the table
+            table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  # Center-align the whole table
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('GRID', (0, 0), (-1, -1), 0.5, (0, 0, 0)),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),  # Center the header row
+                ('TOPPADDING', (0, 0), (-1, 0), 12),  # Add space above the table
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 12),  # Add space below the table
+            ]))
 
-            # Add total in words at the end of the PDF
             total = sum(float(self.table.item(row, 3).text()) for row in range(self.table.rowCount()))
             total_in_words = self.convert_currency_to_words(total)
 
-            # Add numeric total in the PDF
             total_numeric = f"Total: {total:,.2f}"
             styles = getSampleStyleSheet()
 
-            # Create paragraph for total in numbers and total in words
             total_paragraph = Paragraph(f"<b>{total_numeric}</b>", styles['Normal'])
             total_in_words_paragraph = Paragraph(f"<b>Total in Words:</b> {total_in_words}", styles['Normal'])
 
-            # Get current date and add it as a header
             current_date = datetime.datetime.now().strftime("%B %d, %Y")
             date_paragraph = Paragraph(f"<b>Date: {current_date}</b>", styles['Normal'])
 
-            # Build the PDF document with the date, table, and total in words and numeric total
             document.build([date_paragraph, table, total_paragraph, total_in_words_paragraph])
 
             print(f"PDF saved to {file_name}")
 
     def closeEvent(self, event):
         """Close the connection and ensure the thread is properly terminated"""
-        self.conn.commit()  # Ensure all changes are committed
-        self.conn.close()   # Close the database connection
-        event.accept()      # Accept the close event
-
-    def load_data_from_db(self):
-        """Load saved data from the database into the table"""
-        self.cursor.execute("SELECT item_name, quantity, price, total FROM bill")
-        rows = self.cursor.fetchall()
-
-        if rows:
-            for row in rows:
-                row_position = self.table.rowCount()
-                self.table.insertRow(row_position)
-
-                self.table.setItem(row_position, 0, QTableWidgetItem(row[0]))
-                self.table.setItem(row_position, 1, QTableWidgetItem(str(row[1])))
-                self.table.setItem(row_position, 2, QTableWidgetItem(str(row[2])))
-                self.table.setItem(row_position, 3, QTableWidgetItem(str(row[3])))
-
-            self.calculate_total()  # Recalculate total after loading data
-        else:
-            print("No data found in the database.")
+        self.conn.close()
+        event.accept()
 
     def convert_currency_to_words(self, amount):
         """Convert a numeric amount to words (Indian numbering system)"""
         units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
                  "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
         tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
-        large_units = ["", "Hundred", "Thousand", "Lakh", "Crore"]  # Using Lakh and Crore instead of Million and Billion
+        large_units = ["", "Hundred", "Thousand", "Lakh", "Crore"]
 
         def convert_three_digits(n):
-            """Helper function for converting numbers less than 1000"""
+            """Convert a number less than 1000 to words"""
             if n == 0:
                 return ""
             elif n < 20:
@@ -267,6 +282,7 @@ class BillEntrySystem(QWidget):
                 return units[n // 100] + " Hundred" + ('' if n % 100 == 0 else ' ' + convert_three_digits(n % 100))
 
         def num_to_words(n):
+            """Convert a number to words for Indian currency system"""
             if n == 0:
                 return "Zero"
             
@@ -290,7 +306,8 @@ class BillEntrySystem(QWidget):
         else:
             return f"{rupees_in_words} Rupees"
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = BillEntrySystem()
     window.show()
