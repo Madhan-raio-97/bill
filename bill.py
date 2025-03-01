@@ -2,12 +2,13 @@ import sys
 import sqlite3
 import os
 import datetime
-from PyQt6.QtCore import QRegularExpression
+from PyQt6.QtCore import QRegularExpression, QDate
 from PyQt6.QtGui import QRegularExpressionValidator
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QDateEdit
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
+
 
 class BillEntrySystem(QWidget):
     def __init__(self):
@@ -47,12 +48,13 @@ class BillEntrySystem(QWidget):
                                 item_name TEXT,
                                 quantity REAL,
                                 price REAL,
-                                total REAL)''')
+                                total REAL,
+                                date TEXT)''')
         self.conn.commit()
 
     def load_data_from_db(self):
         """Load the saved data from the database into the table"""
-        self.cursor.execute("SELECT item_name, quantity, price, total FROM bill")
+        self.cursor.execute("SELECT item_name, quantity, price, total, date FROM bill")
         rows = self.cursor.fetchall()
 
         for row in rows:
@@ -60,7 +62,7 @@ class BillEntrySystem(QWidget):
             self.table.insertRow(row_position)
             for col, value in enumerate(row):
                 self.table.setItem(row_position, col, QTableWidgetItem(str(value)))
-        
+
         self.calculate_total()
 
     def init_ui(self):
@@ -78,6 +80,18 @@ class BillEntrySystem(QWidget):
         # Corrected the Price validator regex
         price_validator = QRegularExpressionValidator(QRegularExpression(r"^\d{1,8}(\.\d{1,2})?$"))
         self.price_input = self.create_input_layout(entry_layout, "Price:", price_validator)
+
+        # Date input field (default to current date)
+        self.date_input = QDateEdit(QDate.currentDate())  # Default to the current date
+        self.date_input.setDisplayFormat("dd-MM-yyyy")  # Set format to dd-MM-yyyy
+        self.date_input.setCalendarPopup(True)
+
+        # Set minimum date to the current date to prevent future dates
+        today = QDate.currentDate()
+        self.date_input.setMinimumDate(today)  # No future date selection
+
+        entry_layout.addWidget(QLabel("Date:"))
+        entry_layout.addWidget(self.date_input)
 
         # Action Buttons (Add, Remove, Clear, Download)
         action_layout = self.create_action_buttons()
@@ -140,8 +154,8 @@ class BillEntrySystem(QWidget):
     def create_table_widget(self):
         """Create table for displaying the items"""
         table = QTableWidget()
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Item Name", "Quantity", "Price", "Total"])
+        table.setColumnCount(5)  # Added an extra column for the date
+        table.setHorizontalHeaderLabels(["Item Name", "Quantity", "Price", "Total", "Date"])
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         return table
@@ -155,7 +169,7 @@ class BillEntrySystem(QWidget):
         except ValueError:
             self.add_button.setEnabled(False)
             return
-        
+
         if item_name and quantity > 0 and price > 0:
             self.add_button.setEnabled(True)
         else:
@@ -165,15 +179,16 @@ class BillEntrySystem(QWidget):
         item_name = self.item_input.text()
         quantity = float(self.quantity_input.text().strip() or 1)
         price = float(self.price_input.text().replace(",", ""))
+        date = self.date_input.date().toString("dd-MM-yyyy")  # Get the selected date in dd-MM-yyyy format
 
         if item_name and quantity > 0 and price > 0:
             total = quantity * price
-            self.save_item_to_db(item_name, quantity, price, total)
+            self.save_item_to_db(item_name, quantity, price, total, date)
 
-    def save_item_to_db(self, item_name, quantity, price, total):
+    def save_item_to_db(self, item_name, quantity, price, total, date):
         """Save the item to the database and update the table"""
-        self.cursor.execute("INSERT INTO bill (item_name, quantity, price, total) VALUES (?, ?, ?, ?) ",
-                            (item_name, quantity, price, total))
+        self.cursor.execute("INSERT INTO bill (item_name, quantity, price, total, date) VALUES (?, ?, ?, ?, ?) ",
+                            (item_name, quantity, price, total, date))
         self.conn.commit()
 
         row_position = self.table.rowCount()
@@ -183,6 +198,7 @@ class BillEntrySystem(QWidget):
         self.table.setItem(row_position, 1, QTableWidgetItem(str(quantity)))
         self.table.setItem(row_position, 2, QTableWidgetItem(str(price)))
         self.table.setItem(row_position, 3, QTableWidgetItem(str(total)))
+        self.table.setItem(row_position, 4, QTableWidgetItem(date))
 
         # Clear input fields
         self.item_input.clear()
@@ -223,17 +239,18 @@ class BillEntrySystem(QWidget):
                 [Paragraph("<b>Item Name</b>", getSampleStyleSheet()['Heading4']),
                  Paragraph("<b>Quantity</b>", getSampleStyleSheet()['Heading4']),
                  Paragraph("<b>Price</b>", getSampleStyleSheet()['Heading4']),
-                 Paragraph("<b>Total</b>", getSampleStyleSheet()['Heading4'])]
+                 Paragraph("<b>Total</b>", getSampleStyleSheet()['Heading4']),
+                 Paragraph("<b>Date</b>", getSampleStyleSheet()['Heading4'])]
             ]
 
             # Populate the table with data from the QTableWidget
             for row in range(self.table.rowCount()):
-                data.append([self.table.item(row, col).text() for col in range(4)])
+                data.append([self.table.item(row, col).text() for col in range(5)])
 
             table = Table(data)
             
             # Adding padding and style to the table
-            table.setStyle(TableStyle([
+            table.setStyle(TableStyle([ 
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  # Center-align the whole table
                 ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
                 ('GRID', (0, 0), (-1, -1), 0.5, (0, 0, 0)),
